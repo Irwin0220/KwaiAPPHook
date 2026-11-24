@@ -90,6 +90,27 @@ public final class Cap {
             w("hook okhttp build ok");
         } catch (Throwable t) { w("hook okhttp failed: " + t); }
 
+
+        // FormBody 字段级抓取（mobileQuick 的 body 就是 form）
+        try {
+            Class<?> fb = XposedHelpers.findClass("okhttp3.FormBody$Builder", cl);
+            XposedBridge.hookAllMethods(fb, "add", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        w("[FORM] " + p.args[0] + " = " + p.args[1]);
+                    } catch (Throwable ignored) {}
+                }
+            });
+            XposedBridge.hookAllMethods(fb, "addEncoded", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        w("[FORM-ENC] " + p.args[0] + " = " + p.args[1]);
+                    } catch (Throwable ignored) {}
+                }
+            });
+            w("hook FormBody$Builder.add ok");
+        } catch (Throwable t) { w("hook FormBody failed: " + t); }
+
         try {
             Class<?> chain = XposedHelpers.findClass("okhttp3.internal.http.RealInterceptorChain", cl);
             XposedBridge.hookAllMethods(chain, "proceed", new XC_MethodHook() {
