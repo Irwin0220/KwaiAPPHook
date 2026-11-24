@@ -119,6 +119,49 @@ public final class Cap {
             }
         } catch (Throwable ignored) {}
 
+
+        // ⑥ token 注入 + 响应抓取（核心实验：让 App 用我们的 token 发请求）
+        try {
+            Class<?> fb = XposedHelpers.findClass("okhttp3.FormBody$Builder", cl);
+            XposedBridge.hookAllMethods(fb, "add", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        String name = String.valueOf(p.args[0]);
+                        if ("quickLoginToken".equals(name)) {
+                            String inject = readInject();
+                            w("[TOKEN-ORIG] " + p.args[1]);
+                            if (inject != null && inject.length() == 64) {
+                                p.args[1] = inject;
+                                w("[TOKEN-INJECTED] " + inject);
+                            }
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            });
+            w("hook FormBody token inject ok");
+        } catch (Throwable t) { w("hook FormBody inject failed: " + t); }
+
+        try {
+            Class<?> chain = XposedHelpers.findClass("okhttp3.internal.http.RealInterceptorChain", cl);
+            XposedBridge.hookAllMethods(chain, "proceed", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam p) {
+                    try {
+                        Object resp = p.getResult();
+                        if (resp == null) return;
+                        Object req = XposedHelpers.callMethod(resp, "request");
+                        String u = String.valueOf(XposedHelpers.callMethod(req, "url"));
+                        if (!u.contains("login")) return;
+                        int code = (Integer) XposedHelpers.callMethod(resp, "code");
+                        Object peek = XposedHelpers.callMethod(resp, "peekBody", 8000L);
+                        String body = String.valueOf(XposedHelpers.callMethod(peek, "string"));
+                        w("[LOGIN-RESP " + code + "] " + u.substring(0, Math.min(120, u.length())));
+                        w("      R " + (body.length() > 600 ? body.substring(0, 600) : body));
+                    } catch (Throwable ignored) {}
+                }
+            });
+            w("hook login response ok");
+        } catch (Throwable t) { w("hook login response failed: " + t); }
+
         // ④ Cronet（App 部分请求走这里，比如 mobileQuick）
         try {
             Class<?> c = XposedHelpers.findClass("aegon.chrome.net.impl.CronetUrlRequest", cl);
@@ -176,6 +219,15 @@ public final class Cap {
 
     private static String mhash(XC_MethodHook.MethodHookParam q) {
         return String.valueOf(q.method != null ? ((java.lang.reflect.Method) q.method).getName() : "?");
+    }
+
+
+    private static String readInject() {
+        try {
+            byte[] buf = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("/data/local/tmp/inject_token.txt"));
+            String s = new String(buf, "UTF-8").trim();
+            return s.length() == 64 ? s : null;
+        } catch (Throwable t) { return null; }
     }
 
 }
