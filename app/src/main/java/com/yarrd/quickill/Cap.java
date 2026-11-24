@@ -127,6 +127,11 @@ public final class Cap {
                 @Override protected void beforeHookedMethod(MethodHookParam p) {
                     try {
                         String name = String.valueOf(p.args[0]);
+                        String val = String.valueOf(p.args[1]);
+                        if ("publicKey".equals(name) || "raw".equals(name) || "secret".equals(name)
+                                || "deviceName".equals(name) || "ispType".equals(name)) {
+                            w("[FORM] " + name + " = " + val);
+                        }
                         if ("quickLoginToken".equals(name)) {
                             String inject = readInject();
                             w("[TOKEN-ORIG] " + p.args[1]);
