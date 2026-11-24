@@ -4,57 +4,89 @@ import android.util.Log;
 
 import java.io.File;
 import java.io.FileWriter;
-import java.lang.reflect.Method;
-import java.util.Map;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.WeakHashMap;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 
 /**
- * 在快手进程内直接读取请求与响应，不依赖 MITM、不受证书固定影响。
- * 输出 /sdcard/quickcap.log（adb pull 即可，无需 root）
+ * 进程内抓包：okhttp + Cronet，覆盖插件独立 ClassLoader。
+ *
+ * 关键点：登录插件（login_gateway_plugin）跑在自己的 ClassLoader 里，
+ * 用主 ClassLoader 找 aegon.chrome.net.impl.CronetUrlRequest 找到的是另一份。
+ * 这里 hook 全局 ClassLoader.loadClass，目标类一被加载就在它真正的 ClassLoader 上挂 hook。
  */
 public final class Cap {
 
     private static final String TAG = "QUICKCAP";
-    private static final File OUT = new File("/sdcard/quickcap.log");
+    private static final File OUT = new File("/data/local/tmp/quickcap.log");
+
+    private static final Set<String> HOOKED = Collections.synchronizedSet(new HashSet<String>());
 
     public static synchronized void w(String s) {
         Log.i(TAG, s);
-        try (FileWriter fw = new FileWriter(OUT, true)) {
-            fw.write(s);
-            fw.write("\n");
-        } catch (Throwable ignored) {}
+        try (FileWriter fw = new FileWriter(OUT, true)) { fw.write(s); fw.write("\n"); } catch (Throwable ignored) {}
     }
 
-    public static void install(ClassLoader cl) {
-        w("=== Cap installed ===");
+    private static final String[] CRONET_CLASSES = {
+            "aegon.chrome.net.impl.CronetUrlRequest",
+            "org.chromium.net.impl.CronetUrlRequest",
+            "com.kuaishou.aegon.net.impl.CronetUrlRequest",
+    };
 
-        // ① okhttp：每个请求构建完成时（URL + 全部 header + body）
+    public static void install(final ClassLoader mainCl) {
+        w("=== Cap installed, cl=" + mainCl + " ===");
+        hookOkhttp(mainCl);
+
+        // 全局：任何 ClassLoader 加载到目标类时立刻挂 hook
+        try {
+            XposedBridge.hookAllMethods(ClassLoader.class, "loadClass", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam p) {
+                    Object r = p.getResult();
+                    if (r == null) return;
+                    String n = ((Class<?>) r).getName();
+                    for (String t : CRONET_CLASSES) {
+                        if (t.equals(n)) { hookCronet((Class<?>) r); }
+                    }
+                    if ("qhm.a".equals(n) || "xfm.a".equals(n)) { hookLoginApi((Class<?>) r); }
+                }
+            });
+            w("hook ClassLoader.loadClass ok");
+        } catch (Throwable t) { w("hook loadClass failed: " + t); }
+
+        // 已经加载过的，直接试一遍
+        for (String t : CRONET_CLASSES) {
+            try { hookCronet(XposedHelpers.findClass(t, mainCl)); } catch (Throwable ignored) {}
+        }
+        for (String t : new String[]{"qhm.a", "xfm.a"}) {
+            try { hookLoginApi(XposedHelpers.findClass(t, mainCl)); } catch (Throwable ignored) {}
+        }
+    }
+
+    // ---------------- okhttp ----------------
+    private static void hookOkhttp(ClassLoader cl) {
         try {
             Class<?> b = XposedHelpers.findClass("okhttp3.Request$Builder", cl);
             XposedBridge.hookAllMethods(b, "build", new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam p) {
                     try {
                         Object req = p.getResult();
-                        Object url = XposedHelpers.callMethod(req, "url");
-                        Object hdrs = XposedHelpers.callMethod(req, "headers");
+                        String u = String.valueOf(XposedHelpers.callMethod(req, "url"));
+                        String h = String.valueOf(XposedHelpers.callMethod(req, "headers")).replace('\n', '|');
                         Object body = XposedHelpers.callMethod(req, "body");
-                        String u = String.valueOf(url);
                         w("[REQ] " + u);
-                        w("      H " + String.valueOf(hdrs).replace('\n', '|'));
-                        if (body != null) w("      B " + safeBody(body));
-                        if (u.contains("login") || u.contains("mobileQuick") || u.contains("10010") || u.contains("wosms")) {
-                            w("      ^^^ 登录相关 ^^^");
-                        }
+                        w("      H " + h);
+                        if (body != null) w("      B " + body);
                     } catch (Throwable t) { w("[REQ-ERR] " + t); }
                 }
             });
-            w("hook okhttp Request$Builder.build ok");
+            w("hook okhttp build ok");
         } catch (Throwable t) { w("hook okhttp failed: " + t); }
 
-        // ② okhttp：响应（code + body 预览）
         try {
             Class<?> chain = XposedHelpers.findClass("okhttp3.internal.http.RealInterceptorChain", cl);
             XposedBridge.hookAllMethods(chain, "proceed", new XC_MethodHook() {
@@ -63,50 +95,88 @@ public final class Cap {
                         Object resp = p.getResult();
                         if (resp == null) return;
                         Object req = XposedHelpers.callMethod(resp, "request");
-                        Object url = XposedHelpers.callMethod(req, "url");
-                        String u = String.valueOf(url);
-                        if (!(u.contains("login") || u.contains("ksapisrv"))) return;
+                        String u = String.valueOf(XposedHelpers.callMethod(req, "url"));
                         int code = (Integer) XposedHelpers.callMethod(resp, "code");
                         Object peek = XposedHelpers.callMethod(resp, "peekBody", 8000L);
-                        Object s = XposedHelpers.callMethod(peek, "string");
                         w("[RESP " + code + "] " + u);
-                        w("      R " + s);
-                    } catch (Throwable t) { w("[RESP-ERR] " + t); }
+                        w("      R " + XposedHelpers.callMethod(peek, "string"));
+                    } catch (Throwable ignored) {}
                 }
             });
-            w("hook okhttp RealInterceptorChain.proceed ok");
+            w("hook proceed ok");
         } catch (Throwable t) { w("hook proceed failed: " + t); }
-
-        // ③ mobileQuick 的 Map 参数（最直接）
-        try {
-            Class<?> api = XposedHelpers.findClass("qhm.a", cl);
-            XposedBridge.hookAllMethods(api, "g", new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
-                    w("[MQ-PARAMS] " + String.valueOf(p.args[0]));
-                }
-            });
-            w("hook qhm.a.g(mobileQuick) ok");
-        } catch (Throwable t) { w("hook qhm.a.g failed: " + t); }
-
-        // ④ Cronet 路径
-        try {
-            Class<?> c = XposedHelpers.findClass("aegon.chrome.net.impl.CronetUrlRequest", cl);
-            XposedBridge.hookAllMethods(c, "start", new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) {
-                    try {
-                        Object u = XposedHelpers.getObjectField(p.thisObject, "l");
-                        String s = String.valueOf(u);
-                        w("[CRONET-REQ] " + s);
-                        Object h = XposedHelpers.getObjectField(p.thisObject, "q");
-                        if (h != null) w("      H " + String.valueOf(h).replace('\n', '|'));
-                    } catch (Throwable t) { w("[CRONET-ERR] " + t); }
-                }
-            });
-            w("hook CronetUrlRequest.start ok");
-        } catch (Throwable t) { w("hook cronet failed: " + t); }
     }
 
-    private static String safeBody(Object body) {
-        try { return String.valueOf(body); } catch (Throwable t) { return "<body?>"; }
+    // ---------------- Cronet ----------------
+    private static void hookCronet(Class<?> c) {
+        if (c == null || !HOOKED.add(c.getName() + "@" + System.identityHashCode(c.getClassLoader()))) return;
+        w(">>> hooking Cronet in loader " + c.getClassLoader() + " : " + c.getName());
+        try {
+            XposedBridge.hookAllMethods(c, "start", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    String u = "";
+                    for (String f : new String[]{"l", "mUrl", "url"}) {
+                        try { Object v = XposedHelpers.getObjectField(p.thisObject, f); if (v != null) { u = String.valueOf(v); break; } } catch (Throwable ignored) {}
+                    }
+                    w("[CRONET-REQ] " + u);
+                    for (String f : new String[]{"q", "mRequestHeaders", "headers"}) {
+                        try { Object v = XposedHelpers.getObjectField(p.thisObject, f); if (v != null) { w("      H " + String.valueOf(v).replace('\n','|')); break; } } catch (Throwable ignored) {}
+                    }
+                }
+            });
+            w("   hook Cronet.start ok");
+        } catch (Throwable t) { w("   hook Cronet.start failed: " + t); }
+
+        try {
+            XposedBridge.hookAllMethods(c, "onResponseStarted", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam p) {
+                    try {
+                        StringBuilder sb = new StringBuilder("[CRONET-RESP] ");
+                        for (Object a : p.args) sb.append(String.valueOf(a)).append(" | ");
+                        w(sb.toString());
+                    } catch (Throwable ignored) {}
+                }
+            });
+            w("   hook Cronet.onResponseStarted ok");
+        } catch (Throwable t) { w("   hook Cronet.onResponseStarted failed: " + t); }
+
+        try {
+            XposedBridge.hookAllMethods(XposedHelpers.findClass("aegon.chrome.net.impl.CronetUploadDataStream", c.getClassLoader()),
+                    "readData", new XC_MethodHook() {
+                        @Override protected void beforeHookedMethod(MethodHookParam p) {
+                            w("[CRONET-BODY?] readData args=" + p.args.length);
+                        }
+                    });
+            w("   hook CronetUploadDataStream ok");
+        } catch (Throwable ignored) {}
+    }
+
+    // ---------------- 登录 API 接口（Retrofit 实现类） ----------------
+    private static void hookLoginApi(Class<?> apiIf) {
+        if (apiIf == null || !HOOKED.add("api@" + System.identityHashCode(apiIf.getClassLoader()))) return;
+        w(">>> hooking login api interface " + apiIf.getName());
+        try {
+            // 接口方法是抽象的，改挂它的代理实现：Retrofit create 出来的类
+            Class<?> retrofit = XposedHelpers.findClass("retrofit2.Retrofit", apiIf.getClassLoader());
+            XposedBridge.hookAllMethods(retrofit, "create", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam p) {
+                    Object r = p.getResult();
+                    if (r == null) return;
+                    Class<?> rc = r.getClass();
+                    if (!HOOKED.add("impl@" + rc.getName())) return;
+                    w("   retrofit impl: " + rc.getName() + " for " + p.args[0]);
+                    XposedBridge.hookAllMethods(rc, "invoke", new XC_MethodHook() {
+                        @Override protected void beforeHookedMethod(MethodHookParam q) {
+                            try {
+                                Object m = q.args.length > 2 ? q.args[2] : null;
+                                String mn = m != null ? String.valueOf(((java.lang.reflect.Method) m).getName()) : "?";
+                                w("[API-CALL] method=" + mn + " args=" + (q.args.length > 1 ? String.valueOf(q.args[1]) : ""));
+                            } catch (Throwable ignored) {}
+                        }
+                    });
+                }
+            });
+            w("   hook retrofit2.Retrofit.create ok");
+        } catch (Throwable t) { w("   hook retrofit failed: " + t); }
     }
 }
