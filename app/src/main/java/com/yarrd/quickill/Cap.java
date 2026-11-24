@@ -92,13 +92,24 @@ public final class Cap {
 
         // ⑤ 运营商 SDK（in DVA plugin dex）—— 抓 token 产出点
         try {
-            Class<?> dcl = XposedHelpers.findClass("dalvik.system.DexClassLoader", cl);
-            XposedBridge.hookAllConstructors(dcl, new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam p) {
-                    try { hookSdk((ClassLoader) p.thisObject); } catch (Throwable ignored) {}
-                }
-            });
-            w("hook DexClassLoader ctor ok");
+            for (String ln : new String[]{"dalvik.system.DexClassLoader",
+                                          "dalvik.system.InMemoryDexClassLoader",
+                                          "dalvik.system.PathClassLoader",
+                                          "dalvik.system.BaseDexClassLoader"}) {
+                try {
+                    Class<?> dcl = XposedHelpers.findClass(ln, cl);
+                    XposedBridge.hookAllConstructors(dcl, new XC_MethodHook() {
+                        @Override protected void afterHookedMethod(MethodHookParam p) {
+                            try {
+                                ClassLoader loader = (ClassLoader) p.thisObject;
+                                w("[CL] " + loader.getClass().getSimpleName());
+                                hookSdk(loader);
+                            } catch (Throwable ignored) {}
+                        }
+                    });
+                } catch (Throwable ignored) {}
+            }
+            w("hook ClassLoader ctors ok");
         } catch (Throwable t) { w("hook DexClassLoader failed: " + t); }
         // 插件可能已经加载过，用已知 loader 再试一次
         try {
@@ -129,7 +140,7 @@ public final class Cap {
     private static void hookSdk(final ClassLoader loader) {
         if (loader == null) return;
         if (!SDK_HOOKED.add(String.valueOf(System.identityHashCode(loader)))) return;
-        for (String name : new String[]{"i21.c_f", "com.unicom.online.account.kernel.AuthModel"}) {
+        for (String name : new String[]{"i21.c_f", "com.kuaishou.growth.login.gateway.model.AuthModel"}) {
             try {
                 Class<?> c = XposedHelpers.findClass(name, loader);
                 w(">>> SDK class found: " + name + " in " + loader);
@@ -149,11 +160,11 @@ public final class Cap {
                         w("   hook " + name + "." + m + " ok");
                     } catch (Throwable ignored) {}
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable t) { w("   SDK class " + name + " not found in this loader"); }
         }
         // AuthModel 字段全量 dump
         try {
-            Class<?> am = XposedHelpers.findClass("com.unicom.online.account.kernel.AuthModel", loader);
+            Class<?> am = XposedHelpers.findClass("com.kuaishou.growth.login.gateway.model.AuthModel", loader);
             XposedBridge.hookAllMethods(am, "toString", new XC_MethodHook() {
                 @Override protected void afterHookedMethod(MethodHookParam q) {
                     try { w("[AUTHMODEL] " + q.getResult()); } catch (Throwable ignored) {}
