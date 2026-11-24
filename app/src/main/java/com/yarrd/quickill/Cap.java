@@ -78,6 +78,10 @@ public final class Cap {
                         Object req = p.getResult();
                         String u = String.valueOf(XposedHelpers.callMethod(req, "url"));
                         w("[OKREQ] " + u);
+                        try {
+                            Object hh = XposedHelpers.callMethod(req, "headers");
+                            w("      H " + String.valueOf(hh).replace('\n', '|'));
+                        } catch (Throwable ignored) {}
                         Object body = XposedHelpers.callMethod(req, "body");
                         if (body != null) {
                             Object s = body.toString();
