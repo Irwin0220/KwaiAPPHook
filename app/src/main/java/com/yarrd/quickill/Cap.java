@@ -91,6 +91,69 @@ public final class Cap {
         } catch (Throwable t) { w("hook okhttp failed: " + t); }
 
 
+
+        // ---------- WebView 全链路（运营商授权 token 的来源） ----------
+        try {
+            Class<?> wv = XposedHelpers.findClass("android.webkit.WebView", cl);
+            XposedBridge.hookAllMethods(wv, "loadUrl", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    try { w("[WV-LOAD] " + p.args[0]); } catch (Throwable ignored) {}
+                }
+            });
+            XposedBridge.hookAllMethods(wv, "loadDataWithBaseURL", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    try { w("[WV-BASE] " + p.args[0] + " | html_len=" + String.valueOf(p.args[1]).length()); } catch (Throwable ignored) {}
+                }
+            });
+            w("hook WebView.loadUrl ok");
+        } catch (Throwable t) { w("hook WebView failed: " + t); }
+
+        try {
+            Class<?> wcc = XposedHelpers.findClass("android.webkit.WebViewClient", cl);
+            XposedBridge.hookAllMethods(wcc, "shouldOverrideUrlLoading", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        Object u = p.args[1] instanceof String ? p.args[1] : XposedHelpers.callMethod(p.args[1], "getUrl");
+                        w("[WV-NAV] " + u);
+                    } catch (Throwable ignored) {}
+                }
+            });
+            w("hook shouldOverrideUrlLoading ok");
+        } catch (Throwable t) { w("hook WebViewClient failed: " + t); }
+
+        // JS 桥注册 + 所有被调方法
+        try {
+            Class<?> wv = XposedHelpers.findClass("android.webkit.WebView", cl);
+            XposedBridge.hookAllMethods(wv, "addJavascriptInterface", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        Object obj = p.args[0];
+                        String name = String.valueOf(p.args[1]);
+                        w("[WV-BRIDGE] name=" + name + " obj=" + (obj==null?"null":obj.getClass().getName()));
+                        if (obj != null && HOOKED.add("bridge@"+obj.getClass().getName())) {
+                            XposedBridge.hookAllMethods(obj.getClass(), "invoke", new XC_MethodHook() {
+                                @Override protected void beforeHookedMethod(MethodHookParam q) {
+                                    try {
+                                        StringBuilder sb = new StringBuilder("[BRIDGE-INVOKE] ");
+                                        Object m = q.method;
+                                        sb.append(((java.lang.reflect.Method) m).getName()).append("(");
+                                        if (q.args != null) for (Object a : q.args) sb.append(String.valueOf(a)).append(", ");
+                                        sb.append(")");
+                                        w(sb.toString());
+                                        if (q.args != null) for (Object a : q.args) {
+                                            String v = String.valueOf(a);
+                                            if (v != null && v.length() == 64) w("[BRIDGE-TOKEN?] " + v);
+                                        }
+                                    } catch (Throwable ignored) {}
+                                }
+                            });
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            });
+            w("hook addJavascriptInterface ok");
+        } catch (Throwable t) { w("hook addJavascriptInterface failed: " + t); }
+
         // FormBody 字段级抓取（mobileQuick 的 body 就是 form）
         try {
             Class<?> fb = XposedHelpers.findClass("okhttp3.FormBody$Builder", cl);
