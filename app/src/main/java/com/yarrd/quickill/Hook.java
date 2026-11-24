@@ -67,6 +67,7 @@ public class Hook implements IXposedHookLoadPackage {
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
         if (!PKG.equals(lpparam.packageName)) return;
         Log.i(TAG, "loaded into " + PKG);
+        try { Cap.install(lpparam.classLoader); } catch (Throwable t) { Log.e(TAG, "Cap.install failed: " + t); }
 
         Class<?> aegon;
         try {
