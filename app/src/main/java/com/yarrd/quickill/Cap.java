@@ -89,6 +89,25 @@ public final class Cap {
             w("hook okhttp build ok");
         } catch (Throwable t) { w("hook okhttp failed: " + t); }
 
+
+        // ⑤ 运营商 SDK（in DVA plugin dex）—— 抓 token 产出点
+        try {
+            Class<?> dcl = XposedHelpers.findClass("dalvik.system.DexClassLoader", cl);
+            XposedBridge.hookAllConstructors(dcl, new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam p) {
+                    try { hookSdk((ClassLoader) p.thisObject); } catch (Throwable ignored) {}
+                }
+            });
+            w("hook DexClassLoader ctor ok");
+        } catch (Throwable t) { w("hook DexClassLoader failed: " + t); }
+        // 插件可能已经加载过，用已知 loader 再试一次
+        try {
+            for (java.lang.ClassLoader l : new java.lang.ClassLoader[]{
+                    XposedHelpers.findClass("okhttp3.OkHttpClient", cl).getClassLoader()}) {
+                hookSdk(l);
+            }
+        } catch (Throwable ignored) {}
+
         // ④ Cronet（App 部分请求走这里，比如 mobileQuick）
         try {
             Class<?> c = XposedHelpers.findClass("aegon.chrome.net.impl.CronetUrlRequest", cl);
@@ -103,4 +122,49 @@ public final class Cap {
             w("hook Cronet.start ok");
         } catch (Throwable t) { w("hook Cronet failed: " + t); }
     }
+
+    private static final java.util.Set<String> SDK_HOOKED = java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
+
+    /** hook 运营商 SDK 的 token 解析器 */
+    private static void hookSdk(final ClassLoader loader) {
+        if (loader == null) return;
+        if (!SDK_HOOKED.add(String.valueOf(System.identityHashCode(loader)))) return;
+        for (String name : new String[]{"i21.c_f", "com.unicom.online.account.kernel.AuthModel"}) {
+            try {
+                Class<?> c = XposedHelpers.findClass(name, loader);
+                w(">>> SDK class found: " + name + " in " + loader);
+                for (String m : new String[]{"u", "x"}) {
+                    try {
+                        XposedBridge.hookAllMethods(c, m, new XC_MethodHook() {
+                            @Override protected void beforeHookedMethod(MethodHookParam q) {
+                                try {
+                                    for (Object a : q.args) {
+                                        if (a instanceof String && ((String) a).length() > 40) {
+                                            w("[SDK-RESP:" + mhash(q) + "] " + a);
+                                        }
+                                    }
+                                } catch (Throwable ignored) {}
+                            }
+                        });
+                        w("   hook " + name + "." + m + " ok");
+                    } catch (Throwable ignored) {}
+                }
+            } catch (Throwable ignored) {}
+        }
+        // AuthModel 字段全量 dump
+        try {
+            Class<?> am = XposedHelpers.findClass("com.unicom.online.account.kernel.AuthModel", loader);
+            XposedBridge.hookAllMethods(am, "toString", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam q) {
+                    try { w("[AUTHMODEL] " + q.getResult()); } catch (Throwable ignored) {}
+                }
+            });
+            w("   hook AuthModel.toString ok");
+        } catch (Throwable ignored) {}
+    }
+
+    private static String mhash(XC_MethodHook.MethodHookParam q) {
+        return String.valueOf(q.method != null ? ((java.lang.reflect.Method) q.method).getName() : "?");
+    }
+
 }
