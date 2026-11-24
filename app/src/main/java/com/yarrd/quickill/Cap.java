@@ -167,6 +167,36 @@ public final class Cap {
             w("hook login response ok");
         } catch (Throwable t) { w("hook login response failed: " + t); }
 
+
+        // ⑦ 截获 App 的 RSA 签名（框架层，任何 ClassLoader 都躲不过）
+        try {
+            Class<?> sig = XposedHelpers.findClass("java.security.Signature", cl);
+            XposedBridge.hookAllMethods(sig, "sign", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam p) {
+                    try {
+                        Object out = p.getResult();
+                        if (!(out instanceof byte[])) return;
+                        byte[] b = (byte[]) out;
+                        if (b.length != 256) return;              // 只关心 RSA-2048
+                        String data = SIGN_DATA.remove(System.identityHashCode(p.thisObject));
+                        String hex = android.util.Base64.encodeToString(b, android.util.Base64.NO_WRAP);
+                        w("[SIGN] data=" + (data == null ? "?" : data) + " secret=" + hex);
+                    } catch (Throwable ignored) {}
+                }
+            });
+            XposedBridge.hookAllMethods(sig, "update", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        if (p.args != null && p.args.length > 0 && p.args[0] instanceof byte[]) {
+                            SIGN_DATA.put(System.identityHashCode(p.thisObject),
+                                new String((byte[]) p.args[0], "UTF-8"));
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            });
+            w("hook java.security.Signature ok");
+        } catch (Throwable t) { w("hook Signature failed: " + t); }
+
         // ④ Cronet（App 部分请求走这里，比如 mobileQuick）
         try {
             Class<?> c = XposedHelpers.findClass("aegon.chrome.net.impl.CronetUrlRequest", cl);
@@ -235,4 +265,7 @@ public final class Cap {
         } catch (Throwable t) { return null; }
     }
 
+
+    private static final java.util.Map<Integer, String> SIGN_DATA =
+            java.util.Collections.synchronizedMap(new java.util.HashMap<Integer, String>());
 }
