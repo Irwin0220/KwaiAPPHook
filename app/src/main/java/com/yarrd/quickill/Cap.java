@@ -53,6 +53,9 @@ public final class Cap {
                         if (t.equals(n)) { hookCronet((Class<?>) r); }
                     }
                     if ("qhm.a".equals(n) || "xfm.a".equals(n)) { hookLoginApi((Class<?>) r); }
+                    if ("okhttp3.Request$Builder".equals(n)) {
+                        hookOkhttp(((Class<?>) r).getClassLoader());
+                    }
                 }
             });
             w("hook ClassLoader.loadClass ok");
@@ -132,8 +135,27 @@ public final class Cap {
                 @Override protected void afterHookedMethod(MethodHookParam p) {
                     try {
                         StringBuilder sb = new StringBuilder("[CRONET-RESP] ");
-                        for (Object a : p.args) sb.append(String.valueOf(a)).append(" | ");
+                        for (Object a : p.args) {
+                            if (a instanceof String[]) { sb.append(java.util.Arrays.toString((String[]) a)); }
+                            else sb.append(String.valueOf(a));
+                            sb.append(" | ");
+                        }
                         w(sb.toString());
+                        // 从请求对象里挖 URL / headers
+                        Class<?> oc = p.thisObject.getClass();
+                        while (oc != null && oc != Object.class) {
+                            for (java.lang.reflect.Field f : oc.getDeclaredFields()) {
+                                try {
+                                    f.setAccessible(true);
+                                    Object v = f.get(p.thisObject);
+                                    if (v == null) continue;
+                                    String t = v.getClass().getName();
+                                    if (t.contains("String")) { w("      F " + f.getName() + " = " + v); }
+                                    else if (t.contains("Headers") || t.contains("Map")) { w("      F " + f.getName() + " = " + String.valueOf(v).replace('\n','|')); }
+                                } catch (Throwable ignored) {}
+                            }
+                            oc = oc.getSuperclass();
+                        }
                     } catch (Throwable ignored) {}
                 }
             });
