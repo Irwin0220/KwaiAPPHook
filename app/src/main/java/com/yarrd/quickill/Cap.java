@@ -107,16 +107,6 @@ public final class Cap {
     }
 
     private static String safeBody(Object body) {
-        try {
-            Object s = body.toString();
-            if (s != null && !s.contains("RequestBody$") ) return String.valueOf(s);
-        } catch (Throwable ignored) {}
-        try {
-            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
-            Object buf = XposedHelpers.newInstance(XposedHelpers.findClass("okio.Buffer", null));
-            XposedHelpers.callMethod(body, "writeTo", buf);
-            Object bytes = XposedHelpers.callMethod(buf, "readByteArray");
-            return new String((byte[]) bytes, "UTF-8");
-        } catch (Throwable t) { return "<body unreadable>"; }
+        try { return String.valueOf(body); } catch (Throwable t) { return "<body?>"; }
     }
 }
