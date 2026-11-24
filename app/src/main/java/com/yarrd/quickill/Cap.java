@@ -41,12 +41,7 @@ public final class Cap {
             XposedBridge.hookAllMethods(u, "openConnection", new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam p) {
                     try {
-                        String url = String.valueOf(p.thisObject);
-                        if (url.contains("ksapisrv") || url.contains("gifshow") || url.contains("kuaishou")
-                                || url.contains("10010") || url.contains("wosms") || url.contains("chinamobile")
-                                || url.contains("189.cn") || url.contains("telecom")) {
-                            w("[URL] " + url);
-                        }
+                        w("[URL] " + String.valueOf(p.thisObject));
                     } catch (Throwable ignored) {}
                 }
             });
@@ -82,7 +77,6 @@ public final class Cap {
                     try {
                         Object req = p.getResult();
                         String u = String.valueOf(XposedHelpers.callMethod(req, "url"));
-                        if (!(u.contains("ksapisrv") || u.contains("10010") || u.contains("wosms"))) return;
                         w("[OKREQ] " + u);
                         Object body = XposedHelpers.callMethod(req, "body");
                         if (body != null) {
@@ -94,5 +88,19 @@ public final class Cap {
             });
             w("hook okhttp build ok");
         } catch (Throwable t) { w("hook okhttp failed: " + t); }
+
+        // ④ Cronet（App 部分请求走这里，比如 mobileQuick）
+        try {
+            Class<?> c = XposedHelpers.findClass("aegon.chrome.net.impl.CronetUrlRequest", cl);
+            XposedBridge.hookAllMethods(c, "start", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        Object v = XposedHelpers.getObjectField(p.thisObject, "l");
+                        w("[CRONET] " + String.valueOf(v));
+                    } catch (Throwable ignored) {}
+                }
+            });
+            w("hook Cronet.start ok");
+        } catch (Throwable t) { w("hook Cronet failed: " + t); }
     }
 }
