@@ -110,20 +110,5 @@ public class Hook implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             Log.e(TAG, "hook Aegon.k failed (non fatal): " + t);
         }
-
-        // ③ 直接把网关加进 QUIC→TCP 回落黑名单，等原生库初始化完再调用
-        new Thread(() -> {
-            for (int i = 0; i < 30; i++) {
-                try {
-                    Thread.sleep(1000);
-                    XposedHelpers.callStaticMethod(aegon,
-                            "nativeSetQuicFallbackToTcpBlacklist",
-                            (Object) TCP_ONLY_HOSTS);
-                    Log.i(TAG, "nativeSetQuicFallbackToTcpBlacklist applied (try " + (i + 1) + ")");
-                } catch (Throwable ignored) {
-                    // 原生库还没 load，继续等
-                }
-            }
-        }, "quick-kill").start();
     }
 }
