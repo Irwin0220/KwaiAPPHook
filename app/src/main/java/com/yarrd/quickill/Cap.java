@@ -166,6 +166,10 @@ public final class Cap {
                         Object peek = XposedHelpers.callMethod(resp, "peekBody", 8000L);
                         String body = String.valueOf(XposedHelpers.callMethod(peek, "string"));
                         w("[LOGIN-RESP " + code + "] " + u.substring(0, Math.min(120, u.length())));
+                        try {
+                            Object hh = XposedHelpers.callMethod(req, "headers");
+                            w("      HF " + String.valueOf(hh).replace('\n', '|'));
+                        } catch (Throwable ignored) {}
                         w("      R " + body);
                     } catch (Throwable ignored) {}
                 }
