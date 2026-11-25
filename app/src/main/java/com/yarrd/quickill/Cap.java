@@ -203,6 +203,37 @@ public final class Cap {
             w("hook java.security.Signature ok");
         } catch (Throwable t) { w("hook Signature failed: " + t); }
 
+
+        // ⑧ 整条请求替换：把 mobileQuick 换成本地文件里的 URL+body，由 App 的栈发出
+        try {
+            Class<?> b = XposedHelpers.findClass("okhttp3.Request$Builder", cl);
+            XposedBridge.hookAllMethods(b, "build", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam p) {
+                    try {
+                        Object req = p.getResult();
+                        String u = String.valueOf(XposedHelpers.callMethod(req, "url"));
+                        if (!u.contains("login/mobileQuick")) return;
+                        String injUrl = readFile("/data/local/tmp/inject_url.txt");
+                        String injBody = readFile("/data/local/tmp/inject_body.txt");
+                        if (injUrl == null || injBody == null) return;
+                        w("[REPLACE] 原始: " + u.substring(0, Math.min(80, u.length())));
+                        w("[REPLACE] 替换为: " + injUrl.substring(0, Math.min(120, injUrl.length())));
+                        Object nb = XposedHelpers.callMethod(req, "newBuilder");
+                        XposedHelpers.callMethod(nb, "url", injUrl);
+                        Class<?> rbc = XposedHelpers.findClass("okhttp3.RequestBody", cl);
+                        Class<?> mt = XposedHelpers.findClass("okhttp3.MediaType", cl);
+                        Object media = XposedHelpers.callStaticMethod(mt, "parse", "application/x-www-form-urlencoded");
+                        Object rb = XposedHelpers.callStaticMethod(rbc, "create",
+                                media, injBody, new Class[]{mt, String.class});
+                        XposedHelpers.callMethod(nb, "post", rb);
+                        p.setResult(XposedHelpers.callMethod(nb, "build"));
+                        w("[REPLACE] done");
+                    } catch (Throwable t) { w("[REPLACE-ERR] " + t); }
+                }
+            });
+            w("hook full-request replace ok");
+        } catch (Throwable t) { w("hook replace failed: " + t); }
+
         // ④ Cronet（App 部分请求走这里，比如 mobileQuick）
         try {
             Class<?> c = XposedHelpers.findClass("aegon.chrome.net.impl.CronetUrlRequest", cl);
@@ -274,4 +305,12 @@ public final class Cap {
 
     private static final java.util.Map<Integer, String> SIGN_DATA =
             java.util.Collections.synchronizedMap(new java.util.HashMap<Integer, String>());
+
+    private static String readFile(String path) {
+        try {
+            byte[] b = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(path));
+            String v = new String(b, "UTF-8").trim();
+            return v.isEmpty() ? null : v;
+        } catch (Throwable t) { return null; }
+    }
 }
