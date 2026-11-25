@@ -134,7 +134,9 @@ public final class Cap {
                         String val = String.valueOf(p.args[1]);
                         if ("publicKey".equals(name) || "raw".equals(name) || "secret".equals(name)
                                 || "deviceName".equals(name) || "ispType".equals(name)) {
-                            w("[FORM] " + name + " = " + val);
+                            StringBuilder sb2 = new StringBuilder("[FORM] ");
+                        sb2.append(name).append(" = ").append(val);
+                        w(sb2.toString());
                         }
                         if ("quickLoginToken".equals(name)) {
                             String inject = readInject();
@@ -164,7 +166,7 @@ public final class Cap {
                         Object peek = XposedHelpers.callMethod(resp, "peekBody", 8000L);
                         String body = String.valueOf(XposedHelpers.callMethod(peek, "string"));
                         w("[LOGIN-RESP " + code + "] " + u.substring(0, Math.min(120, u.length())));
-                        w("      R " + (body.length() > 600 ? body.substring(0, 600) : body));
+                        w("      R " + body);
                     } catch (Throwable ignored) {}
                 }
             });
