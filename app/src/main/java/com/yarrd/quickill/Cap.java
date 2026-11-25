@@ -220,11 +220,28 @@ public final class Cap {
                         w("[REPLACE] 替换为: " + injUrl.substring(0, Math.min(120, injUrl.length())));
                         Object nb = XposedHelpers.callMethod(req, "newBuilder");
                         XposedHelpers.callMethod(nb, "url", injUrl);
-                        Class<?> rbc = XposedHelpers.findClass("okhttp3.RequestBody", cl);
-                        Class<?> mt = XposedHelpers.findClass("okhttp3.MediaType", cl);
-                        Object media = XposedHelpers.callStaticMethod(mt, "parse", "application/x-www-form-urlencoded");
-                        Object rb = XposedHelpers.callStaticMethod(rbc, "create",
-                                media, injBody, new Class[]{mt, String.class});
+                        Object rb = null;
+                        for (Class<?> rbc : new Class<?>[]{
+                                XposedHelpers.findClassIfExists("okhttp3.RequestBody", cl),
+                                XposedHelpers.findClassIfExists("okhttp3.RequestBody$Companion", cl)}) {
+                            if (rbc == null) continue;
+                            try {
+                                Class<?> mt = XposedHelpers.findClass("okhttp3.MediaType", cl);
+                                Object media = XposedHelpers.callStaticMethod(mt, "parse",
+                                        "application/x-www-form-urlencoded");
+                                for (java.lang.reflect.Method m : rbc.getDeclaredMethods()) {
+                                    if (!m.getName().equals("create")) continue;
+                                    Class<?>[] pt = m.getParameterTypes();
+                                    if (pt.length == 2 && pt[0] == mt && pt[1] == String.class) {
+                                        m.setAccessible(true);
+                                        rb = m.invoke(null, media, injBody);
+                                        break;
+                                    }
+                                }
+                            } catch (Throwable ignored) {}
+                            if (rb != null) break;
+                        }
+                        if (rb == null) throw new RuntimeException("RequestBody.create 未找到");
                         XposedHelpers.callMethod(nb, "post", rb);
                         p.setResult(XposedHelpers.callMethod(nb, "build"));
                         w("[REPLACE] done");
